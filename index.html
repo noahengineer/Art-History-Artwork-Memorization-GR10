@@ -685,6 +685,13 @@
             </svg>
           </div>
 
+          <button id="btnExportHtml" type="button" title="Download a single index.html with all your current cards baked in for GitHub Pages" class="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-stone-950 text-xs sm:text-sm font-bold shadow-sm transition flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            <span>Download index.html (GitHub Pages)</span>
+          </button>
+
           <button id="btnExportJson" type="button" class="px-3 py-2 rounded-xl border border-stone-200 hover:bg-stone-100 text-stone-700 text-xs sm:text-sm font-medium transition">
             Export JSON
           </button>
@@ -698,6 +705,19 @@
             + Add Card
           </button>
         </div>
+      </div>
+
+      <!-- GitHub Pages Multi-Device Sync Notice -->
+      <div class="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-3.5 sm:px-5 flex flex-wrap items-center justify-between gap-3 text-xs text-stone-700">
+        <div class="space-y-0.5">
+          <div class="font-bold text-stone-900 flex items-center gap-1.5">
+            <span>🌐 Deploying on GitHub Pages for all devices?</span>
+          </div>
+          <p class="text-stone-600">Cards created in the browser save to your current device first. Click <strong>Download index.html (GitHub Pages)</strong> above and upload that file to your GitHub repo so every device and visitor gets the exact same cards built in.</p>
+        </div>
+        <button id="btnResetToBuiltIn" type="button" class="px-3 py-1.5 rounded-xl bg-white hover:bg-stone-100 border border-stone-300 text-stone-700 font-semibold text-xs transition shrink-0">
+          Sync to Built-In Deck
+        </button>
       </div>
 
       <!-- Deck Cards Grid -->
@@ -1288,21 +1308,29 @@
       }
 
       function loadCards() {
+        // Start with the authoritative starterDeck baked into the HTML so every device has the same base deck
+        const canonicalMap = new Map();
+        starterDeck.forEach(sc => {
+          canonicalMap.set((sc.title || '').toLowerCase().trim(), Object.assign({}, sc));
+        });
+
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
           if (raw) {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              cards = parsed.map(c => Object.assign({}, c, {
-                age: inferCardAge(c),
-                period: c.period || (inferCardAge(c) === 'Age 4: Renaissance Art' ? 'High Renaissance (Period 4.3)' : '')
-              }));
-              const existingTitles = new Set(cards.map(c => (c.title || '').toLowerCase().trim()));
-              starterDeck.forEach(sc => {
-                if (!existingTitles.has((sc.title || '').toLowerCase().trim())) {
-                  cards.push(Object.assign({}, sc));
+              // Keep any custom user-created cards that aren't already in starterDeck, and use starterDeck for built-in cards
+              const customCards = [];
+              parsed.forEach(c => {
+                const key = (c.title || '').toLowerCase().trim();
+                if (!canonicalMap.has(key)) {
+                  customCards.push(Object.assign({}, c, {
+                    age: inferCardAge(c),
+                    period: c.period || (inferCardAge(c) === 'Age 4: Renaissance Art' ? 'High Renaissance (Period 4.3)' : '')
+                  }));
                 }
               });
+              cards = customCards.concat(starterDeck.map(sc => Object.assign({}, sc)));
               saveCards();
               return;
             }
@@ -2219,6 +2247,50 @@
 
         // Deck search, export, and import
         document.getElementById('deckSearchInput').addEventListener('input', renderDeckGrid);
+
+        document.getElementById('btnResetToBuiltIn').addEventListener('click', () => {
+          try {
+            localStorage.removeItem(STORAGE_KEY);
+          } catch (err) {}
+          cards = starterDeck.map(c => Object.assign({}, c));
+          sessionState = {};
+          currentIndex = 0;
+          saveCards();
+          document.getElementById('deckCountBadge').textContent = String(cards.length);
+          renderDeckGrid();
+          showToast('Synced to the published built-in deck');
+        });
+
+        document.getElementById('btnExportHtml').addEventListener('click', () => {
+          // Clone the document and reset transient UI state so the exported index.html boots cleanly on every device
+          const clone = document.documentElement.cloneNode(true);
+          const vPractice = clone.querySelector('#viewPractice');
+          const vCreate = clone.querySelector('#viewCreate');
+          const vDeck = clone.querySelector('#viewDeck');
+          if (vPractice) vPractice.classList.remove('hidden');
+          if (vCreate) vCreate.classList.add('hidden');
+          if (vDeck) vDeck.classList.add('hidden');
+          const dGrid = clone.querySelector('#deckGrid');
+          if (dGrid) dGrid.innerHTML = '';
+          const toast = clone.querySelector('#toastBanner');
+          if (toast) toast.classList.add('hidden');
+
+          const serializedCards = JSON.stringify(cards, null, 8).replace(/"id":\s*"([^"]+)"/g, "id: '$1'");
+          const currentDocHtml = '<!DOCTYPE html>\n' + clone.outerHTML;
+          const updatedHtml = currentDocHtml
+            .replace(/const STORAGE_KEY = '[^']+';/, "const STORAGE_KEY = 'atelier_flashcards_ieb_v" + Date.now() + "';")
+            .replace(/const starterDeck = \[[\s\S]*?\];/, 'const starterDeck = ' + serializedCards + ';');
+          const blob = new Blob([updatedHtml], { type: 'text/html;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'index.html';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          showToast('Downloaded index.html with all cards baked in for GitHub Pages!');
+        });
 
         document.getElementById('btnExportJson').addEventListener('click', () => {
           const dataStr = JSON.stringify(cards, null, 2);
